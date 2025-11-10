@@ -1,5 +1,8 @@
+artifacts/books_data.txt
 __pycache__/
 *.pyc
-.venv/
+.pytest_cache/
+artifacts/
+*.ipynb_checkpoints/
 .DS_Store
-
+venv/

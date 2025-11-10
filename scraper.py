@@ -1,130 +1,216 @@
-import os
-import sys
+# scraper.py
+# -*- coding: utf-8 -*-
+"""
+Учебный парсер Books to Scrape.
+
+Функции:
+- get_book_data(book_url) -> dict
+- scrape_books(catalog_page1_url, is_save=False, return_json=False, page_count=0, verbose=True)
+
+Совместимо с автотестами:
+- ключи в get_book_data в lower-case;
+- присутствует product_info (словарь с таблицей характеристик);
+- rating — строка '1'..'5';
+- каждая сохранённая строка — валидный JSON-объект, содержит "_source_url".
+"""
+
+from __future__ import annotations
+
+import json
+import re
 import time
-import argparse
-from urllib.parse import urljoin
+from pathlib import Path
+from typing import Dict, List, Optional
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
 
-DEFAULT_URL = "https://books.toscrape.com/"
-OUTPUT_DIR = "artifacts"
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "books_data.txt")
+# ==========================
+# Настройки HTTP
+# ==========================
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+TIMEOUT = 15
 
 
-def fetch_html(url: str, session: requests.Session) -> str:
-    """Скачать HTML страницы, вернуть текст."""
-    resp = session.get(url, timeout=20)
-    resp.raise_for_status()
-    return resp.text
-
-
-def parse_page(html: str, base_url: str) -> list[dict]:
-    """Разобрать страницу и вернуть список книг со всеми полями."""
-    soup = BeautifulSoup(html, "html.parser")
-    books = []
-    for card in soup.select("article.product_pod"):
-        title = card.h3.a.get("title", "").strip()
-        price = card.select_one("p.price_color").get_text(strip=True).replace("£", "")
-        rating_tag = card.select_one("p.star-rating")
-        # во втором классе лежит словесный рейтинг (One, Two, Three, Four, Five)
-        rating = ""
-        if rating_tag and rating_tag.get("class"):
-            # ['star-rating', 'Three'] -> 'Three'
-            classes = rating_tag.get("class")
-            rating = next((c for c in classes if c != "star-rating"), "")
-        availability = soup.select_one("p.instock.availability")
-        if availability:
-            availability = availability.get_text(strip=True)
-        else:
-            availability = ""
-        rel_link = card.h3.a.get("href", "")
-        url = urljoin(base_url, rel_link)
-
-        books.append(
-            {
-                "title": title,
-                "price": price,
-                "rating": rating,
-                "availability": availability,
-                "url": url,
-            }
-        )
-    return books
-
-
-def find_next_page_url(soup: BeautifulSoup, current_url: str) -> str | None:
-    """Вернуть URL следующей страницы или None."""
-    next_li = soup.select_one("li.next > a")
-    if not next_li:
+# ==========================
+# Вспомогательные функции
+# ==========================
+def _to_float_money(s: Optional[str]) -> Optional[float]:
+    """Извлечь число из денежной строки (убираем валюту, пробелы и запятые)."""
+    if not s:
         return None
-    return urljoin(current_url, next_li.get("href"))
-
-
-def save_tsv(rows: list[dict], path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        # шапка
-        f.write("title\tprice\trating\tavailability\turl\n")
-        for r in rows:
-            line = f"{r['title']}\t{r['price']}\t{r['rating']}\t{r['availability']}\t{r['url']}\n"
-            f.write(line)
-
-
-def scrape_books(start_url: str = DEFAULT_URL, max_pages: int | None = None, delay: float = 0.5) -> int:
-    """
-    Собрать книги, начиная со стартового URL.
-    Возвращает количество собранных записей.
-    """
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
-    })
-
-    all_rows: list[dict] = []
-    current_url = start_url
-    pages_done = 0
-
-    while current_url:
-        html = fetch_html(current_url, session)
-        soup = BeautifulSoup(html, "html.parser")
-        # base для относительных ссылок
-        base = current_url if current_url.endswith("/") else current_url.rsplit("/", 1)[0] + "/"
-
-        page_rows = parse_page(html, base)
-        all_rows.extend(page_rows)
-        pages_done += 1
-
-        if max_pages is not None and pages_done >= max_pages:
-            break
-
-        next_url = find_next_page_url(soup, current_url)
-        current_url = next_url
-        if current_url:
-            time.sleep(delay)  # быть вежливыми к сайту
-
-    save_tsv(all_rows, OUTPUT_FILE)
-    return len(all_rows)
-
-
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Books scraper (books.toscrape.com)")
-    parser.add_argument("--url", default=DEFAULT_URL, help="Стартовый URL (по умолчанию главная)")
-    parser.add_argument("--max-pages", type=int, default=None, help="Ограничение по числу страниц")
-    args = parser.parse_args(argv)
-
+    s = re.sub(r"[^\d.\-]", "", s)  # оставим только цифры/точки/минус
     try:
-        count = scrape_books(start_url=args.url, max_pages=args.max_pages)
-        print(f"Saved {count} rows to {OUTPUT_FILE}")
-        return 0
-    except requests.HTTPError as e:
-        print(f"HTTP error: {e}", file=sys.stderr)
-    except Exception as e:
-        print(f"Unexpected error: {e}", file=sys.stderr)
-    return 1
+        return float(s)
+    except ValueError:
+        return None
 
 
-if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+def _rating_from_class(tag) -> Optional[str]:
+    """Преобразуем CSS-класс star-rating (One..Five) в строку '1'..'5'."""
+    if not tag or not tag.get("class"):
+        return None
+    classes = tag["class"]
+    scale = {"One": "1", "Two": "2", "Three": "3", "Four": "4", "Five": "5"}
+    for cls in classes:
+        if cls in scale:
+            return scale[cls]
+    return None
+
+
+def _ensure_artifacts_file() -> Path:
+    """Создаём (при необходимости) папку artifacts и возвращаем путь к файлу."""
+    root = Path.cwd()
+    out_dir = root / "artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir / "books_data.txt"
+
+
+def _mk_page_url(catalog_page1_url: str, n: int) -> str:
+    """catalogue/page-1.html -> catalogue/page-{n}.html"""
+    return re.sub(r"page-\d+\.html", f"page-{n}.html", catalog_page1_url)
+
+
+# ==========================
+# Основные функции
+# ==========================
+def get_book_data(book_url: str) -> dict:
+    """
+    Забрать данные со страницы книги (Books to Scrape).
+
+    Формат возвращаемого словаря (как ожидают тесты):
+    {
+      'title': str,
+      'price': float | None,          # из price_text
+      'price_text': str,              # исходная строка с валютой
+      'rating': '1'..'5' | '',
+      'availability': str,
+      'description': str,
+      'product_info': dict[str, str], # таблица Product Information
+      '_source_url': str              # абсолютный URL страницы
+    }
+    """
+    # нормализуем URL
+    if not urlparse(book_url).scheme:
+        book_url = urljoin("http://books.toscrape.com/", book_url)
+
+    resp = requests.get(book_url, headers=HEADERS, timeout=TIMEOUT)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    title_tag = soup.select_one(".product_main h1")
+    rating_tag = soup.select_one(".product_main p.star-rating")
+    desc_tag = soup.select_one("#product_description ~ p")
+
+    # таблица характеристик в dict
+    product_info: Dict[str, str] = {}
+    for row in soup.select("table.table.table-striped tr"):
+        th = row.find("th")
+        td = row.find("td")
+        if th and td:
+            product_info[th.get_text(strip=True)] = td.get_text(strip=True)
+
+    # берём price_text из "Price (incl. tax)" (если нет — из "Price (excl. tax)")
+    price_text = (
+        product_info.get("Price (incl. tax)")
+        or product_info.get("Price (excl. tax)")
+        or ""
+    )
+    price_num = _to_float_money(price_text)
+
+    data = {
+        "title": title_tag.get_text(strip=True) if title_tag else "",
+        "price": price_num,
+        "price_text": price_text,
+        "rating": _rating_from_class(rating_tag) or "",
+        "availability": product_info.get("Availability", ""),
+        "description": desc_tag.get_text(strip=True) if desc_tag else "",
+        "product_info": product_info,
+        "_source_url": book_url,
+    }
+    return data
+
+
+def scrape_books(
+    catalog_page1_url: str,
+    is_save: bool = False,
+    return_json: bool = False,
+    page_count: int = 0,
+    verbose: bool = True,
+) -> List[dict] | str:
+    """
+    Обходит страницы каталога Books to Scrape, собирает ссылки на книги,
+    парсит каждую книгу через get_book_data и возвращает:
+      - list[dict], если return_json=False;
+      - JSON-строку, если return_json=True.
+
+    Параметры:
+      catalog_page1_url : str   URL вида 'http://books.toscrape.com/catalogue/page-1.html'
+      is_save           : bool  сохранять ли результат в artifacts/books_data.txt (NDJSON)
+      return_json       : bool  вернуть JSON-строку вместо списка словарей
+      page_count        : int   сколько страниц обойти (<=0 — обойти до 404/конца каталога)
+      verbose           : bool  печатать прогресс
+    """
+    # --- Сбор ссылок на книги ---
+    urls: List[str] = []
+    max_pages = page_count if page_count and page_count > 0 else 50
+
+    t0 = time.time()
+    for page in range(1, max_pages + 1):
+        page_url = _mk_page_url(catalog_page1_url, page)
+        r = requests.get(page_url, headers=HEADERS, timeout=TIMEOUT)
+        if r.status_code == 404:
+            if verbose:
+                print(f"Страница {page} вернула 404 — остановка.")
+            break
+        r.raise_for_status()
+        if verbose:
+            print(f"Обработаны ссылки со страницы №{page}")
+
+        soup = BeautifulSoup(r.text, "html.parser")
+        for a in soup.select("article.product_pod h3 a"):
+            href = a.get("href", "")
+            urls.append(urljoin(page_url, href))
+
+    if verbose:
+        print(f"Время обработки ссылок: {time.time() - t0:.2f} сек.")
+        print(f"Всего найдено URL книг для парсинга: {len(urls)}")
+        print("Начинаю парсинг")
+
+    # --- Парсинг книг ---
+    books: List[dict] = []
+    t1 = time.time()
+    for u in urls:
+        try:
+            books.append(get_book_data(u))
+        except Exception:
+            # не валимся на одной неудачной книге
+            continue
+
+    if verbose and (time.time() - t1) > 0:
+        dt = time.time() - t1
+        speed = len(books) / dt if dt > 0 else 0
+        print(f"Время парсинга книг: {dt:.2f} сек.")
+        print(f"Средняя скорость: {speed:.2f} книг/сек")
+
+    # --- Сохранение ---
+    if is_save:
+        out_path = _ensure_artifacts_file()
+        if return_json:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(books, ensure_ascii=False, indent=2))
+        else:
+            # NDJSON: одна книга = одна строка JSON
+            with open(out_path, "w", encoding="utf-8") as f:
+                for obj in books:
+                    if "_source_url" not in obj:
+                        obj["_source_url"] = ""
+                    f.write(json.dumps(obj, ensure_ascii=False))
+                    f.write("\n")
+
+    # --- Возврат результата ---
+    if return_json:
+        return json.dumps(books, ensure_ascii=False)
+    return books
