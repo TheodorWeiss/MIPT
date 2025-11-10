@@ -1,66 +1,104 @@
-````markdown
-# 📚 Books Scraper  
+# 📚 Books Scraper
 
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue?logo=python&logoColor=white)
-![BeautifulSoup4](https://img.shields.io/badge/BeautifulSoup4-4.x-green?logo=python&logoColor=white)
-![Requests](https://img.shields.io/badge/Requests-2.x-orange?logo=python&logoColor=white)
-![Pytest](https://img.shields.io/badge/tests-passed-brightgreen?logo=pytest)
-![License](https://img.shields.io/badge/license-MIT-lightgrey)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![Requests](https://img.shields.io/badge/Requests-HTTP%20client-brightgreen)
+![BeautifulSoup4](https://img.shields.io/badge/BeautifulSoup4-HTML%20parser-orange)
+![Pytest](https://img.shields.io/badge/tests-pytest-success)
 
-*A training project for web scraping using Python and BeautifulSoup.*  
+Учебный проект по парсингу каталога **[Books to Scrape](http://books.toscrape.com/)**.  
+Скрипт собирает по каждой книге: название, рейтинг, описание, цены и характеристики из блока **Product Information**.  
+Есть сохранение результата в файл и автотесты.
+
+## 🚀 Возможности
+
+- Парсинг всех страниц каталога или заданного количества страниц;
+- Возврат результата в виде **списка словарей** или **JSON-строки**;
+- Сохранение выгрузки в `artifacts/books_data.txt` (по одной JSON-строке на книгу);
+- Подробный лог прогресса (страницы, время, скорость);
+- Регулярный запуск по расписанию через `schedule`.
+
+## 🗂 Структура репозитория
+
+```text
+.
+├─ artifacts/
+│  └─ books_data.txt          # пример выгрузки (может отсутствовать до первого запуска)
+├─ notebooks/
+│  └─ HW_03_python_ds_2025.ipynb
+├─ tests/
+│  └─ test_scraper.py         # автотесты (pytest)
+├─ .gitignore
+├─ README.md
+├─ requirements.txt
+└─ scraper.py                 # основной скрипт
+
+
+```
+
+> Основная ветка репозитория: **main**. Рабочие изменения вносились в **hw-books-parser** и затем сливались PR в `main`.
 
 ---
 
-## 🎯 Цель проекта  
-Учебный проект по парсингу данных с сайта [Books to Scrape](http://books.toscrape.com/).  
-Скрипт автоматически собирает информацию о книгах — названия, рейтинги, описания, цены и характеристики из таблицы Product Information.
+## ⚙️ Установка
 
----
-
-## 🧩 Используемые библиотеки  
-- `requests`  
-- `beautifulsoup4`  
-- `schedule`  
-- `pytest`  
-
----
-
-## 🚀 Установка и запуск  
-
-### 1️⃣ Установка зависимостей  
+1) Клонирование репозитория:
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/<your_user>/hw-books-parser.git
+cd hw-books-parser
 ````
 
-### 2️⃣ Использование
+2. (Рекомендация) Создать и активировать виртуальное окружение:
+
+```bash
+python -m venv .venv
+# Windows (Git Bash/CMD):
+.venv\Scripts\activate
+# macOS / Linux:
+# source .venv/bin/activate
+```
+
+3. Установить зависимости:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## 🔧 Использование
+
+### Вариант 1: быстрый пример
 
 ```python
 from scraper import scrape_books
 
-# Пример 1: парсинг одной страницы без сохранения
-data = scrape_books(
-    catalog_page1_url="http://books.toscrape.com/catalogue/page-1.html",
-    page_count=1,
-    return_json=True
-)
-print(data[:200])  # часть результата
+catalog_url = "http://books.toscrape.com/catalogue/page-1.html"
 
-# Пример 2: парсинг нескольких страниц с сохранением результатов в файл
-scrape_books(
-    catalog_page1_url="http://books.toscrape.com/catalogue/page-1.html",
+# Вернуть JSON-строку по двум страницам и сохранить копию в artifacts/books_data.txt
+data_json = scrape_books(
+    catalog_page1_url=catalog_url,
+    page_count=2,
+    return_json=True,
     is_save=True,
-    page_count=5
+    verbose=True,
 )
+
+print(data_json[:600], "...")
 ```
 
-После выполнения результат сохраняется в папке **`artifacts/books_data.txt`**
-в формате JSON Lines (по одной книге на строку).
+**Аргументы `scrape_books`:**
+
+* `catalog_page1_url: str` — URL 1-й страницы каталога
+* `page_count: int = 0` — сколько страниц парсить (`0` = до последней)
+* `return_json: bool = False` — вернуть JSON-строку вместо списка
+* `is_save: bool = False` — сохранять результат в `artifacts/books_data.txt`
+* `verbose: bool = True` — печатать ход выполнения
 
 ---
 
-## 🕒 Автоматический запуск (планировщик)
+## ⏰ Регулярный запуск (schedule)
 
-Функцию можно настроить на ежедневный запуск с помощью `schedule`:
+Ежедневно в **19:00**:
 
 ```python
 import schedule
@@ -71,66 +109,54 @@ catalog_url = "http://books.toscrape.com/catalogue/page-1.html"
 
 schedule.every().day.at("19:00").do(
     scrape_books,
-    catalog_url,
+    catalog_page1_url=catalog_url,
+    page_count=5,
     is_save=True,
     return_json=True,
-    page_count=5,
+    verbose=True,
 )
 
 while True:
     schedule.run_pending()
-    time.sleep(5)
+    time.sleep(1)
 ```
+
+> Для локальной проверки можно заменить на `schedule.every(1).minutes.do(...)`.
 
 ---
 
-## 🧪 Тестирование
+## 🧪 Тесты
+
+Запуск из корня репозитория:
+
+**Windows (Git Bash / CMD):**
 
 ```bash
-pytest tests/ -v
+set PYTHONPATH=. && python -m pytest -v tests/test_scraper.py
 ```
 
-Все тесты проверяют корректность структуры данных, количество книг и работу сохранения файла.
+**macOS / Linux:**
+
+```bash
+PYTHONPATH=. python -m pytest -v tests/test_scraper.py
+```
+
+Ожидаемо: `4 passed`.
 
 ---
 
-## 🧾 Пример вывода JSON
+## 📦 Формат выгрузки
 
-```json
-[
-  {
-    "Name": "A Light in the Attic",
-    "Rating": "3",
-    "Description": "It's hard to imagine a world without A Light in the Attic...",
-    "UPC": "a897fe39b1053632",
-    "Product Type": "Books",
-    "Price (excl. tax)": "£51.77",
-    "Price (incl. tax)": "£51.77",
-    "Tax": "£0.00",
-    "Availability": "In stock (22 available)",
-    "Number of reviews": "0"
-  }
-]
-```
+Файл `artifacts/books_data.txt` содержит **по одной валидной JSON-строке на книгу**.
+Ключевые поля:
+`Name`, `Rating` (`"1"`…`"5"`), `Description`, `UPC`, `Product Type`,
+`Price (excl. tax)`, `Price (incl. tax)`, `Tax`, `Availability`, `Number of reviews`, `_source_url`.
 
 ---
 
-## 🗂️ Структура проекта
+## 📄 Лицензия
 
-```
-hw-books-parser/
-├─ artifacts/
-│  └─ books_data.txt
-├─ tests/
-│  └─ test_scraper.py
-├─ scraper.py
-├─ requirements.txt
-├─ README.md
-└─ notebook.ipynb
-```
+Проект создан в учебных целях. Использование **Books to Scrape** разрешено для практики парсинга.
 
 ---
 
-📚 *This project was created for educational purposes as part of the “Programming in Python” course at MIPT (Moscow Institute of Physics and Technology).*
-
-```
